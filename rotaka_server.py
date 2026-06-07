@@ -1,15 +1,16 @@
 """
 Rotaka Multiplayer Platform — Flask + Flask-SocketIO
+Oda yapısı uid-tabanlı: socket sid değişse bile oda yaşamaya devam eder.
 """
 
-import os, random, string, json
+import os, random, string, json, secrets
 from datetime import datetime
 from flask import (Flask, render_template, request, session,
                    redirect, url_for, jsonify, flash)
 from flask_socketio import SocketIO, emit, join_room, leave_room
 import db as DB
 
-# ─── APP SETUP ───────────────────────────────────────────────────────────────
+# ─── APP ─────────────────────────────────────────────────────────────────────
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'rotaka-dev-secret-change-me')
@@ -19,7 +20,7 @@ socketio = SocketIO(app, cors_allowed_origins='*', async_mode='threading',
 
 DB.init_db()
 
-# ─── GOOGLE OAUTH (optional — configure via env vars) ────────────────────────
+# ─── GOOGLE OAUTH (optional) ─────────────────────────────────────────────────
 
 GOOGLE_CLIENT_ID     = os.environ.get('GOOGLE_CLIENT_ID')
 GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET')
@@ -39,11 +40,19 @@ if GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET:
     except ImportError:
         pass
 
-# ─── IN-MEMORY ROOM STATE ────────────────────────────────────────────────────
-# rooms: { room_id: { players:[sid,..], user_ids:{sid:uid}, colors:{sid:color},
-#                     notation:[], game_id:int|None, spectators:set() } }
+# ─── ROOM STATE ───────────────────────────────────────────────────────────────
+#
+# rooms[rid] = {
+#   'uid_to_color': { token: 'Beyaz'|'Siyah' },
+#   'color_to_uid': { 'Beyaz': token, 'Siyah': token },
+#   'uid_to_dbid':  { token: int|None },      # real DB user id
+#   'active_sids':  { sid: token },            # currently connected sockets
+#   'notation':     [...],
+#   'game_id':      int|None,
+#   'spectators':   set(),
+# }
+#
 rooms: dict = {}
-active_games: list = []   # snapshot list for live-games API
 
 
 def gen_room_id():
@@ -53,12 +62,19 @@ def gen_room_id():
             return rid
 
 
+def _player_token():
+    """Unique token per browser session (works for both guests and logged-in users)."""
+    if 'player_token' not in session:
+        session['player_token'] = secrets.token_hex(16)
+    return session['player_token']
+
+
 def current_user():
     uid = session.get('user_id')
     return DB.get_user_by_id(uid) if uid else None
 
 
-# ─── AUTH HELPERS ────────────────────────────────────────────────────────────
+# ─── AUTH HELPERS ─────────────────────────────────────────────────────────────
 
 def login_required(f):
     from functools import wraps
@@ -123,11 +139,10 @@ def logout():
     return redirect(url_for('index'))
 
 
-# Google OAuth
 @app.route('/auth/google')
 def auth_google():
     if not google_oauth:
-        flash('Google girişi şu an aktif değil.', 'error')
+        flash('Google girişi aktif değil.', 'error')
         return redirect(url_for('login'))
     redirect_uri = url_for('auth_google_callback', _external=True)
     return google_oauth.authorize_redirect(redirect_uri)
@@ -142,10 +157,8 @@ def auth_google_callback():
     gid   = info['sub']
     email = info.get('email', '')
     name  = info.get('name', '').replace(' ', '_')[:20]
-
     u = DB.get_user_by_google(gid)
     if not u:
-        # try existing email
         base = name or email.split('@')[0]
         username = base
         attempt  = 0
@@ -166,8 +179,8 @@ def profile(username):
     if not u:
         flash('Kullanıcı bulunamadı.', 'error')
         return redirect(url_for('index'))
-    stats  = DB.get_user_stats(u['id'])
-    games  = DB.get_user_games(u['id'], limit=10)
+    stats   = DB.get_user_stats(u['id'])
+    games   = DB.get_user_games(u['id'], limit=10)
     friends = DB.get_friends(u['id'])
     is_friend = viewer and DB.are_friends(viewer['id'], u['id']) if viewer else False
     rank   = DB.elo_to_rank(u['elo'])
@@ -179,32 +192,30 @@ def profile(username):
 
 @app.route('/vs-computer')
 def vs_computer():
-    user = current_user()
-    return render_template('vs_computer.html', user=user)
+    return render_template('vs_computer.html', user=current_user())
 
 
 @app.route('/spectate')
 def spectate():
-    user  = current_user()
-    live  = _live_games_list()
-    return render_template('spectate.html', user=user, live_games=live)
+    return render_template('spectate.html', user=current_user(),
+                           live_games=_live_games_list())
 
 
 @app.route('/game/<room_id>')
 def game_page(room_id):
-    user = current_user()
-    return render_template('game.html', user=user, room_id=room_id)
+    return render_template('game.html', user=current_user(),
+                           room_id=room_id.upper())
 
 
-# ─── REST API ────────────────────────────────────────────────────────────────
+# ─── REST API ─────────────────────────────────────────────────────────────────
 
 @app.route('/api/me')
 def api_me():
     u = current_user()
     if not u:
         return jsonify({'error': 'not_logged_in'}), 401
-    return jsonify({'id': u['id'], 'username': u['username'], 'elo': u['elo'],
-                    'language': u['language']})
+    return jsonify({'id': u['id'], 'username': u['username'],
+                    'elo': u['elo'], 'language': u['language']})
 
 
 @app.route('/api/language', methods=['POST'])
@@ -215,7 +226,6 @@ def api_language():
         return jsonify({'error': 'invalid'}), 400
     if u:
         DB.update_language(u['id'], lang)
-    # also store in session for guests
     session['language'] = lang
     return jsonify({'ok': True})
 
@@ -228,7 +238,7 @@ def api_live_games():
 @app.route('/api/friend/add', methods=['POST'])
 @login_required
 def api_friend_add():
-    uid = session['user_id']
+    uid    = session['user_id']
     target = DB.get_user_by_username(request.json.get('username', ''))
     if not target or target['id'] == uid:
         return jsonify({'error': 'invalid'}), 400
@@ -239,67 +249,64 @@ def api_friend_add():
 @app.route('/api/friend/accept', methods=['POST'])
 @login_required
 def api_friend_accept():
-    uid = session['user_id']
-    req_id = request.json.get('requester_id')
-    DB.accept_friend_request(req_id, uid)
+    DB.accept_friend_request(request.json.get('requester_id'), session['user_id'])
     return jsonify({'ok': True})
 
 
 @app.route('/api/leaderboard')
 def api_leaderboard():
-    rows = DB.leaderboard(20)
-    return jsonify([dict(r) for r in rows])
+    return jsonify([dict(r) for r in DB.leaderboard(20)])
 
 
-# ─── HELPERS ─────────────────────────────────────────────────────────────────
+# ─── HELPERS ──────────────────────────────────────────────────────────────────
 
 def _live_games_list():
     result = []
     for rid, room in rooms.items():
-        if len(room['players']) == 2:
-            uids = [room['user_ids'].get(s) for s in room['players']]
-            names = []
-            for uid in uids:
-                if uid:
-                    u = DB.get_user_by_id(uid)
-                    names.append(u['username'] if u else '?')
-                else:
-                    names.append('Misafir')
+        if len(room['uid_to_color']) == 2 and room.get('game_id'):
+            names = {}
+            for tok, col in room['uid_to_color'].items():
+                db_id = room['uid_to_dbid'].get(tok)
+                u = DB.get_user_by_id(db_id) if db_id else None
+                names[col] = u['username'] if u else 'Misafir'
             result.append({
                 'room_id': rid,
-                'white': names[0] if room['colors'].get(room['players'][0]) == 'Beyaz' else names[1],
-                'black': names[1] if room['colors'].get(room['players'][0]) == 'Beyaz' else names[0],
-                'moves': len(room.get('notation', [])),
+                'white':   names.get('Beyaz', '?'),
+                'black':   names.get('Siyah', '?'),
+                'moves':   len(room.get('notation', [])),
             })
     return result
 
 
-def _room_of(sid):
+def _room_of_sid(sid):
     for rid, room in rooms.items():
-        if sid in room['players'] or sid in room.get('spectators', set()):
+        if sid in room.get('active_sids', {}):
+            return rid, room
+        if sid in room.get('spectators', set()):
             return rid, room
     return None, None
 
 
-def _broadcast_room(rid, event, data):
-    """Emit to all players + spectators in a room."""
-    socketio.emit(event, data, to=rid)
+def _sid_color(room, sid):
+    tok = room['active_sids'].get(sid)
+    return room['uid_to_color'].get(tok) if tok else None
 
 
-# ─── SOCKET.IO ───────────────────────────────────────────────────────────────
+# ─── SOCKET.IO ────────────────────────────────────────────────────────────────
 
 @socketio.on('create_room')
 def handle_create_room():
-    rid = gen_room_id()
-    uid = session.get('user_id')
+    rid   = gen_room_id()
+    tok   = _player_token()
+    db_id = session.get('user_id')
     rooms[rid] = {
-        'players':    [request.sid],
-        'user_ids':   {request.sid: uid},
-        'colors':     {request.sid: 'Beyaz'},
-        'notation':   [],
-        'game_id':    None,
-        'spectators': set(),
-        'started_at': datetime.utcnow().isoformat(),
+        'uid_to_color': {tok: 'Beyaz'},
+        'color_to_uid': {'Beyaz': tok},
+        'uid_to_dbid':  {tok: db_id},
+        'active_sids':  {request.sid: tok},
+        'notation':     [],
+        'game_id':      None,
+        'spectators':   set(),
     }
     join_room(rid)
     emit('room_created', {'room_id': rid, 'your_color': 'Beyaz'})
@@ -307,34 +314,66 @@ def handle_create_room():
 
 @socketio.on('join_room_req')
 def handle_join_room(data):
-    rid = data.get('room_id', '').strip().upper()
-    uid = session.get('user_id')
+    rid   = data.get('room_id', '').strip().upper()
+    tok   = _player_token()
+    db_id = session.get('user_id')
 
     if rid not in rooms:
-        emit('join_error', {'msg': 'Oda bulunamadı.'});  return
+        emit('join_error', {'msg': 'Oda bulunamadı.'}); return
     room = rooms[rid]
-    if len(room['players']) >= 2:
-        emit('join_error', {'msg': 'Bu oda dolu.'});     return
-    if request.sid in room['players']:
-        emit('join_error', {'msg': 'Zaten bu odadasın.'}); return
 
-    room['players'].append(request.sid)
-    room['user_ids'][request.sid] = uid
-    room['colors'][request.sid]   = 'Siyah'
+    # Already in this room (rejoin case)?
+    if tok in room['uid_to_color']:
+        join_room(rid)
+        room['active_sids'][request.sid] = tok
+        emit('game_start', {'your_color': room['uid_to_color'][tok], 'room_id': rid})
+        return
+
+    if len(room['uid_to_color']) >= 2:
+        emit('join_error', {'msg': 'Bu oda dolu.'}); return
+
+    room['uid_to_color'][tok]    = 'Siyah'
+    room['color_to_uid']['Siyah'] = tok
+    room['uid_to_dbid'][tok]     = db_id
+    room['active_sids'][request.sid] = tok
     join_room(rid)
 
-    # Create game record in DB
-    white_sid = room['players'][0]
-    black_sid = request.sid
-    w_uid = room['user_ids'].get(white_sid)
-    b_uid = uid
-    w_elo = DB.get_user_by_id(w_uid)['elo'] if w_uid else 1000
-    b_elo = DB.get_user_by_id(b_uid)['elo'] if b_uid else 1000
-    room['game_id'] = DB.create_game(rid, w_uid, b_uid, w_elo, b_elo)
+    # Create game record
+    w_tok  = room['color_to_uid']['Beyaz']
+    w_dbid = room['uid_to_dbid'].get(w_tok)
+    b_dbid = db_id
+    w_elo  = DB.get_user_by_id(w_dbid)['elo'] if w_dbid else 1000
+    b_elo  = DB.get_user_by_id(b_dbid)['elo'] if b_dbid else 1000
+    room['game_id'] = DB.create_game(rid, w_dbid, b_dbid, w_elo, b_elo)
 
-    # Notify both
     emit('game_start', {'your_color': 'Siyah', 'room_id': rid})
-    emit('game_start', {'your_color': 'Beyaz', 'room_id': rid}, to=white_sid)
+    socketio.emit('game_start', {'your_color': 'Beyaz', 'room_id': rid}, to=rid)
+
+
+@socketio.on('game_connect')
+def handle_game_connect(data):
+    """Called by game.html on socket connect to (re)join a room."""
+    rid = data.get('room_id', '').strip().upper()
+    tok = _player_token()
+
+    if rid not in rooms:
+        emit('join_error', {'msg': 'Oda bulunamadı. Lobiye dönün.'}); return
+    room = rooms[rid]
+
+    if tok not in room['uid_to_color']:
+        emit('join_error', {'msg': 'Bu odada yetkiniz yok.'}); return
+
+    color = room['uid_to_color'][tok]
+    room['active_sids'][request.sid] = tok
+    join_room(rid)
+
+    # Send current game state to this player
+    emit('game_start', {
+        'your_color':  color,
+        'room_id':     rid,
+        'notation':    room.get('notation', []),
+        'both_joined': len(room['uid_to_color']) == 2,
+    })
 
 
 @socketio.on('spectate_join')
@@ -345,7 +384,6 @@ def handle_spectate_join(data):
     room = rooms[rid]
     room['spectators'].add(request.sid)
     join_room(rid)
-    # Send current notation so spectator can replay
     emit('spectate_state', {'notation': room.get('notation', [])})
 
 
@@ -355,8 +393,7 @@ def handle_make_move(data):
     if rid not in rooms: return
     room = rooms[rid]
     room['notation'] = data.get('notation', room['notation'])
-    mover_color = room['colors'].get(request.sid, 'Beyaz')
-    # broadcast to WHOLE room (players + spectators see it)
+    mover_color = _sid_color(room, request.sid) or 'Beyaz'
     socketio.emit('game_move', {
         'from':        data['from'],
         'to':          data['to'],
@@ -368,15 +405,12 @@ def handle_make_move(data):
 def handle_pie_decision(data):
     rid = data.get('room_id')
     if rid not in rooms: return
-    # broadcast to whole room
     socketio.emit('opponent_pie', {'decision': data['decision']}, to=rid)
-    # on swap, flip the colors stored server-side
     if data['decision'] == 'swap':
         room = rooms[rid]
-        room['colors'] = {
-            sid: ('Siyah' if col == 'Beyaz' else 'Beyaz')
-            for sid, col in room['colors'].items()
-        }
+        room['uid_to_color'] = {tok: ('Siyah' if col == 'Beyaz' else 'Beyaz')
+                                 for tok, col in room['uid_to_color'].items()}
+        room['color_to_uid'] = {col: tok for tok, col in room['uid_to_color'].items()}
 
 
 @socketio.on('chat_message')
@@ -404,21 +438,20 @@ def handle_game_over(data):
     if rid not in rooms: return
     room = rooms[rid]
 
-    winner    = data.get('winner')   # 'Beyaz', 'Siyah', 'draw'
-    reason    = data.get('reason', '')
-    notation  = json.dumps(data.get('notation', []))
-    game_id   = room.get('game_id')
+    winner   = data.get('winner')
+    reason   = data.get('reason', '')
+    notation = json.dumps(data.get('notation', []))
+    game_id  = room.get('game_id')
 
     if game_id:
-        # Determine user IDs
-        w_sid = next((s for s in room['players'] if room['colors'].get(s) == 'Beyaz'), None)
-        b_sid = next((s for s in room['players'] if room['colors'].get(s) == 'Siyah'), None)
-        w_uid = room['user_ids'].get(w_sid)
-        b_uid = room['user_ids'].get(b_sid)
-        w_row = DB.get_user_by_id(w_uid) if w_uid else None
-        b_row = DB.get_user_by_id(b_uid) if b_uid else None
-        w_elo = w_row['elo'] if w_row else 1000
-        b_elo = b_row['elo'] if b_row else 1000
+        w_tok  = room['color_to_uid'].get('Beyaz')
+        b_tok  = room['color_to_uid'].get('Siyah')
+        w_dbid = room['uid_to_dbid'].get(w_tok)
+        b_dbid = room['uid_to_dbid'].get(b_tok)
+        w_row  = DB.get_user_by_id(w_dbid) if w_dbid else None
+        b_row  = DB.get_user_by_id(b_dbid) if b_dbid else None
+        w_elo  = w_row['elo'] if w_row else 1000
+        b_elo  = b_row['elo'] if b_row else 1000
 
         if winner == 'Beyaz':
             w_new, b_new = DB.calc_elo(w_elo, b_elo)
@@ -428,10 +461,9 @@ def handle_game_over(data):
             w_new, b_new = DB.calc_elo(w_elo, b_elo, is_draw=True)
 
         DB.finish_game(game_id, winner, reason, notation, w_new, b_new)
-        if w_uid: DB.update_elo(w_uid, w_new)
-        if b_uid: DB.update_elo(b_uid, b_new)
+        if w_dbid: DB.update_elo(w_dbid, w_new)
+        if b_dbid: DB.update_elo(b_dbid, b_new)
 
-        # Notify elo changes
         socketio.emit('elo_update', {
             'white_elo': w_new, 'black_elo': b_new,
             'white_delta': w_new - w_elo,
@@ -443,15 +475,19 @@ def handle_game_over(data):
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    rid, room = _room_of(request.sid)
+    rid, room = _room_of_sid(request.sid)
     if not rid: return
+
     if request.sid in room.get('spectators', set()):
         room['spectators'].discard(request.sid)
-        leave_room(rid)
         return
-    # It's a player — notify opponent
-    socketio.emit('opponent_disconnected', {}, to=rid)
-    del rooms[rid]
+
+    # Remove socket from active_sids but KEEP the room alive for reconnection
+    room['active_sids'].pop(request.sid, None)
+
+    # If no active players remain AND game hasn't started, clean up
+    if not room['active_sids'] and not room.get('spectators') and not room.get('game_id'):
+        del rooms[rid]
 
 
 # ─── ENTRY POINT ─────────────────────────────────────────────────────────────

@@ -288,9 +288,15 @@ const ctx    = canvas.getContext('2d');
 let CELL = 48;
 
 function resize() {
-  const vw = Math.min(window.innerWidth - (window.innerWidth > 720 ? 310 : 40), 480);
+  const col = document.getElementById('board-col');
+  const available = col ? col.clientWidth : window.innerWidth - 40;
+  const vw = Math.min(available, 480);
   CELL = Math.floor(vw / GRID);
-  canvas.width = canvas.height = CELL * GRID;
+  const size = CELL * GRID;
+  canvas.width = canvas.height = size;
+  const wrap = document.getElementById('canvas-wrap');
+  wrap.style.width  = size + 'px';
+  wrap.style.height = size + 'px';
   draw();
 }
 
@@ -718,7 +724,7 @@ socket.on('connect', () => {
     document.getElementById('spectator-badge').style.display = 'block';
     sysMsg('Seyirci modunda bağlandınız.');
   } else {
-    socket.emit('join_room_req',{room_id: ROOM_ID});
+    socket.emit('game_connect',{room_id: ROOM_ID});
   }
 });
 
