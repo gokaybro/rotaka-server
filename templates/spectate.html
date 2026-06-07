@@ -1,0 +1,47 @@
+{% extends 'base.html' %}
+{% block title %}Rotaka — Canlı Maçlar{% endblock %}
+{% block content %}
+<div class="card-title" data-i18n="spectate.title" style="font-size:1.3rem;margin-bottom:20px">Canlı Maçlar</div>
+
+<div id="live-list">
+{% if live_games %}
+  {% for g in live_games %}
+  <div class="live-game-row">
+    <div class="live-dot"></div>
+    <div class="players">
+      <strong>{{ g.white }}</strong>
+      <span class="vstext">vs</span>
+      <strong>{{ g.black }}</strong>
+    </div>
+    <span style="color:var(--text-muted);font-size:0.78rem">{{ g.moves }} hamle</span>
+    <a href="{{ url_for('game_page', room_id=g.room_id) }}?spectate=1"
+       class="btn btn-blue btn-sm" data-i18n="spectate.watch">İzle</a>
+  </div>
+  {% endfor %}
+{% else %}
+  <p style="color:var(--text-muted)" data-i18n="spectate.none">Şu an canlı maç bulunmuyor.</p>
+{% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Auto-refresh every 10s
+setInterval(() => {
+  fetch('/api/live-games').then(r=>r.json()).then(list => {
+    const el = document.getElementById('live-list');
+    if (!list.length) {
+      el.innerHTML = `<p style="color:var(--text-muted)">${t('spectate.none')}</p>`;
+      return;
+    }
+    el.innerHTML = list.map(g=>`
+      <div class="live-game-row">
+        <div class="live-dot"></div>
+        <div class="players"><strong>${g.white}</strong> <span class="vstext">vs</span> <strong>${g.black}</strong></div>
+        <span style="color:var(--text-muted);font-size:.78rem">${g.moves} ${t('spectate.moves')}</span>
+        <a href="/game/${g.room_id}?spectate=1" class="btn btn-blue btn-sm">${t('spectate.watch')}</a>
+      </div>`).join('');
+  });
+}, 10000);
+</script>
+{% endblock %}

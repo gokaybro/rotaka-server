@@ -1,0 +1,121 @@
+{% extends 'base.html' %}
+{% block title %}Rotaka — Ana Sayfa{% endblock %}
+
+{% block content %}
+<div class="lobby-hero">
+  <h1 data-i18n="lobby.title">⬡ ROTAKA ⬡</h1>
+  <p data-i18n="lobby.subtitle">Çevrimiçi Çok Oyunculu</p>
+</div>
+
+<div class="lobby-grid">
+  <!-- Create / Join -->
+  <div class="card">
+    <button class="btn btn-green btn-full" id="btn-create" style="margin-bottom:16px"
+            data-i18n="lobby.create"></button>
+
+    <div id="room-code-box" class="room-code-box" style="margin-bottom:14px">
+      <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:4px" data-i18n="lobby.room_code"></div>
+      <div class="code" id="room-code-text"></div>
+      <small data-i18n="lobby.room_hint"></small>
+    </div>
+
+    <p style="text-align:center;color:var(--text-muted);font-size:0.82rem;margin:10px 0"
+       data-i18n="lobby.or">— ya da —</p>
+
+    <div style="display:flex;gap:8px">
+      <input class="input" id="room-input" maxlength="6" style="font-family:monospace;letter-spacing:2px;text-transform:uppercase"
+             data-i18n-ph="lobby.join_ph">
+      <button class="btn btn-blue" id="btn-join" data-i18n="lobby.join_btn">Katıl</button>
+    </div>
+
+    <div id="lobby-status" style="margin-top:12px;font-size:0.82rem;color:var(--text-muted);min-height:18px"></div>
+  </div>
+
+  <!-- Live games -->
+  <div class="card">
+    <div class="card-title" data-i18n="lobby.live">Canlı Maçlar</div>
+    <div id="live-list">
+      {% if live_games %}
+        {% for g in live_games %}
+        <div class="live-game-row">
+          <div class="live-dot"></div>
+          <div class="players">
+            <strong>{{ g.white }}</strong>
+            <span class="vstext">vs</span>
+            <strong>{{ g.black }}</strong>
+          </div>
+          <span style="color:var(--text-muted);font-size:0.78rem">{{ g.moves }} hamle</span>
+          <a href="{{ url_for('game_page', room_id=g.room_id) }}?spectate=1"
+             class="btn btn-ghost btn-sm" data-i18n="lobby.watch">İzle</a>
+        </div>
+        {% endfor %}
+      {% else %}
+        <p style="color:var(--text-muted);font-size:0.85rem" data-i18n="lobby.no_live">Şu an canlı maç yok.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script>
+const socket = io();
+let roomId = null;
+
+socket.on('connect', () => setStatus(t('lobby.waiting').replace('…','') + '…', 'var(--text-muted)'));
+socket.on('connect_error', () => setStatus('Sunucuya bağlanılamadı!', 'var(--red)'));
+
+socket.on('room_created', data => {
+  roomId = data.room_id;
+  document.getElementById('room-code-text').textContent = data.room_id;
+  document.getElementById('room-code-box').style.display = 'block';
+  setStatus(t('lobby.waiting'), 'var(--accent)');
+});
+
+socket.on('join_error', data => setStatus(data.msg, 'var(--red)'));
+
+socket.on('game_start', data => {
+  window.location.href = `/game/${data.room_id || roomId}`;
+});
+
+document.getElementById('btn-create').onclick = () => {
+  socket.emit('create_room');
+};
+
+document.getElementById('btn-join').onclick = () => {
+  const rid = document.getElementById('room-input').value.trim().toUpperCase();
+  if (!rid) { setStatus('Lütfen bir oda kodu girin.', 'var(--red)'); return; }
+  roomId = rid;
+  socket.emit('join_room_req', { room_id: rid });
+};
+
+document.getElementById('room-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('btn-join').click();
+});
+
+function setStatus(msg, color) {
+  const el = document.getElementById('lobby-status');
+  el.textContent = msg;
+  el.style.color  = color || 'var(--text-muted)';
+}
+
+// Refresh live games every 15s
+setInterval(() => {
+  fetch('/api/live-games').then(r => r.json()).then(list => {
+    const el = document.getElementById('live-list');
+    if (!list.length) {
+      el.innerHTML = `<p style="color:var(--text-muted);font-size:.85rem">${t('lobby.no_live')}</p>`;
+      return;
+    }
+    el.innerHTML = list.map(g => `
+      <div class="live-game-row">
+        <div class="live-dot"></div>
+        <div class="players"><strong>${g.white}</strong> <span class="vstext">vs</span> <strong>${g.black}</strong></div>
+        <span style="color:var(--text-muted);font-size:.78rem">${g.moves} ${t('lobby.moves')}</span>
+        <a href="/game/${g.room_id}?spectate=1" class="btn btn-ghost btn-sm">${t('lobby.watch')}</a>
+      </div>`).join('');
+  });
+}, 15000);
+</script>
+{% endblock %}

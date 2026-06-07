@@ -1,0 +1,741 @@
+{% extends 'base.html' %}
+{% block title %}Rotaka — Oyun{% endblock %}
+
+{% block head %}
+<style>
+  main { padding: 12px; max-width: 100%; }
+
+  #game-layout {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  /* ── Board column ── */
+  #board-col { display: flex; flex-direction: column; align-items: center; }
+
+  #status-bar {
+    width: 100%;
+    max-width: 480px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 14px;
+    margin-bottom: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.85rem;
+  }
+  #turn-label     { font-weight: 800; font-size: 1rem; }
+  #stats-label    { color: var(--text-muted); font-size: 0.76rem; }
+  #boost-badge    {
+    display: none; background: var(--accent); color: #1a1a2e;
+    font-size: 0.7rem; font-weight: 700; border-radius: 4px;
+    padding: 2px 7px; margin-left: 8px;
+  }
+  #my-color-badge {
+    display: none; font-size: 0.7rem; font-weight: 700;
+    border-radius: 4px; padding: 2px 7px; margin-left: 8px;
+  }
+
+  #canvas-wrap {
+    border: 2px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    box-shadow: 0 0 30px rgba(0,100,255,0.15);
+    cursor: pointer;
+  }
+  #canvas-wrap.opp-turn { cursor: not-allowed; }
+  canvas { display: block; }
+
+  #notation-panel {
+    width: 100%;
+    max-width: 480px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin-top: 8px;
+    font-size: 0.74rem;
+    color: var(--text-dim);
+    max-height: 64px;
+    overflow-y: auto;
+    font-family: monospace;
+  }
+  #notation-panel span { margin-right: 8px; }
+
+  /* ── Right panel (chat + info) ── */
+  #side-panel {
+    width: 260px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  @media(max-width: 720px) { #side-panel { width: 100%; max-width: 480px; } }
+
+  #chat-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    height: 300px;
+  }
+  .chat-title {
+    padding: 8px 12px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: var(--accent);
+    border-bottom: 1px solid var(--border);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  #chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 10px;
+    font-size: 0.8rem;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .chat-msg .from { color: var(--text-dim); font-weight: 600; margin-right: 4px; }
+  .chat-msg .text { color: var(--text); }
+  .chat-msg .ts   { color: var(--text-muted); font-size: 0.7rem; margin-left: 4px; }
+  .system-msg     { color: var(--text-muted); font-style: italic; font-size: 0.78rem; }
+  #chat-input-row {
+    display: flex;
+    gap: 6px;
+    padding: 8px;
+    border-top: 1px solid var(--border);
+  }
+  #chat-input {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    padding: 6px 10px;
+    font-size: 0.82rem;
+  }
+  #chat-send {
+    background: var(--blue);
+    border: none;
+    border-radius: 6px;
+    color: white;
+    padding: 6px 12px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  /* ── Modals ── */
+  #pie-modal { background: rgba(0,0,0,.35); }
+  #pie-modal .modal-box { border-color: var(--accent2); }
+
+  #gameover-modal .modal-box { border-color: var(--accent); }
+  #gameover-modal h2 { margin-bottom: 8px; }
+  #elo-info { color: var(--text-dim); font-size: 0.82rem; margin-bottom: 14px; }
+
+  #spectator-badge {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    text-align: center;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Pie Rule modal (bottom sheet) -->
+<div class="modal-overlay bottom" id="pie-modal">
+  <div class="modal-box" style="max-width:360px">
+    <h2 id="pie-title">👑 PIE RULE</h2>
+    <p id="pie-desc">Beyazın ilk hamlesini gördünüz. Rolleri değiştirmek ister misiniz?</p>
+    <button class="btn btn-muted btn-full" id="btn-keep" style="margin-bottom:8px"></button>
+    <button class="btn btn-orange btn-full" id="btn-swap"></button>
+  </div>
+</div>
+
+<!-- Waiting for pie decision -->
+<div class="modal-overlay bottom" id="pie-waiting">
+  <div class="modal-box" style="border-color:var(--text-muted);max-width:300px;padding:20px">
+    <p style="color:var(--text-dim)" id="pie-wait-text">⏳ Rakip Pie Rule kararını veriyor…</p>
+  </div>
+</div>
+
+<!-- Game over -->
+<div class="modal-overlay" id="gameover-modal">
+  <div class="modal-box">
+    <h2 id="gameover-title"></h2>
+    <p id="gameover-msg" style="color:#ccc;margin-bottom:8px"></p>
+    <p id="elo-info"></p>
+    <a href="{{ url_for('index') }}" class="btn btn-primary btn-full" id="btn-lobby"></a>
+  </div>
+</div>
+
+<div id="game-layout">
+  <!-- Board -->
+  <div id="board-col">
+    <div id="status-bar">
+      <div>
+        <span id="turn-label">BEYAZ — Hamle 1</span>
+        <span id="boost-badge">⚡ BOOST</span>
+        <span id="my-color-badge"></span>
+      </div>
+      <div id="stats-label"></div>
+    </div>
+    <div id="canvas-wrap"><canvas id="board"></canvas></div>
+    <div id="notation-panel"></div>
+  </div>
+
+  <!-- Side panel -->
+  <div id="side-panel">
+    <div id="spectator-badge" style="display:none">👁 Seyirci modunda izliyorsunuz</div>
+
+    <!-- Chat -->
+    <div id="chat-box">
+      <div class="chat-title" data-i18n="game.chat">Sohbet</div>
+      <div id="chat-messages"></div>
+      <div id="chat-input-row">
+        <input id="chat-input" maxlength="200" data-i18n-ph="game.chat_ph">
+        <button id="chat-send" data-i18n="game.send">Gönder</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script>
+// ─── CONFIG ──────────────────────────────────────────────────────────────────
+const ROOM_ID      = '{{ room_id }}';
+const USERNAME     = '{{ user.username if user else "" }}';
+const IS_SPECTATE  = new URLSearchParams(location.search).has('spectate');
+
+const GRID = 9;
+const MAX_REPETITIONS = 3;
+
+// ─── BOARD FLIP (chess.com style) ────────────────────────────────────────────
+let myColor  = null;   // 'Beyaz' | 'Siyah' | null
+let boardFlipped = false;  // true when myColor === 'Siyah'
+let onlineMode = false;
+let roomId = ROOM_ID;
+
+function updateFlip() { boardFlipped = onlineMode && myColor === 'Siyah'; }
+
+function toDisplay(gameR, gameC) {
+  if (boardFlipped) return [GRID-1-gameR, GRID-1-gameC];
+  return [gameR, gameC];
+}
+function toGame(dispR, dispC) {
+  if (boardFlipped) return [GRID-1-dispR, GRID-1-dispC];
+  return [dispR, dispC];
+}
+
+// ─── CONSTANTS ───────────────────────────────────────────────────────────────
+function stateHash() {
+  const boardKey = state.board.map(row=>row.join(',')).join('|');
+  const topKey   = [...state.infTop].sort().join(';');
+  const botKey   = [...state.infBot].sort().join(';');
+  return `${boardKey}~${state.turn}~${topKey}~${botKey}`;
+}
+
+const TOP_HOME = [[0,2],[0,3],[0,4],[0,5],[0,6]];
+const BOT_HOME = [[8,2],[8,3],[8,4],[8,5],[8,6]];
+function isTopHome(r,c){ return TOP_HOME.some(([tr,tc])=>tr===r&&tc===c); }
+function isBotHome(r,c){ return BOT_HOME.some(([tr,tc])=>tr===r&&tc===c); }
+
+const C = {
+  wall:'#2c3e50', ground:'#3d5066', home:'#7f8c8d',
+  infTop:'#c0392b', infBot:'#2980b9',
+  highlight:'#2ecc71', select:'#f1c40f', gridLine:'#243447',
+};
+
+// ─── STATE ───────────────────────────────────────────────────────────────────
+let state = {};
+function initState() {
+  state = {
+    board: [
+      ['D','D','Y_Siyah_Ust','U_Siyah_Ust','K_Siyah_Ust','U_Siyah_Ust','Y_Siyah_Ust','D','D'],
+      ['D','B','B','B','B','B','B','B','D'],
+      ['B','B','B','B','B','B','B','B','B'],
+      ['B','B','B','B','D','B','B','B','B'],
+      ['D','B','B','D','B','D','B','B','D'],
+      ['B','B','B','B','D','B','B','B','B'],
+      ['B','B','B','B','B','B','B','B','B'],
+      ['D','B','B','B','B','B','B','B','D'],
+      ['D','D','Y_Beyaz_Alt','U_Beyaz_Alt','K_Beyaz_Alt','U_Beyaz_Alt','Y_Beyaz_Alt','D','D'],
+    ],
+    turn:'Beyaz', moveCount:1, selected:null, validMoves:[],
+    boardHistory: new Map(), pieAvail:true, isSwapped:false, reboundBoost:false,
+    infTop: new Set(), infBot: new Set(), notation:[], over:false,
+    inactive:0, repMoves: new Set(),
+  };
+}
+
+// ─── CANVAS ──────────────────────────────────────────────────────────────────
+const canvas = document.getElementById('board');
+const ctx    = canvas.getContext('2d');
+let CELL = 48;
+
+function resize() {
+  const vw = Math.min(window.innerWidth - (window.innerWidth > 720 ? 310 : 40), 480);
+  CELL = Math.floor(vw / GRID);
+  canvas.width = canvas.height = CELL * GRID;
+  draw();
+}
+
+// ─── IMAGES ──────────────────────────────────────────────────────────────────
+const IMG = {};
+let imagesLoaded = 0;
+const IMAGE_KEYS = [
+  'bk1','bk2','bk2s','bk3','bt1','bt2','bt3','bt1s','bt2s','bt3s',
+  'by1','by2','by2s','by3','sk1','sk2','sk2s','sk3',
+  'st1','st2','st3','st1s','st2s','st3s','sy1','sy2','sy2s','sy3',
+];
+
+function preloadImages(cb) {
+  IMAGE_KEYS.forEach(key => {
+    const img = new Image();
+    img.src = `/static/icons/${key}.png`;
+    img.onload = img.onerror = () => { imagesLoaded++; if (imagesLoaded === IMAGE_KEYS.length) cb(); };
+    IMG[key] = img;
+  });
+}
+
+function getPieceImageKey(pType, pColor) {
+  let stage = pType.endsWith("''") ? 2 : pType.endsWith("'") ? 1 : 0;
+  const tier  = stage + 1;
+  const base  = pType.replace(/'+$/, '');
+  const col   = pColor === 'Beyaz' ? 'b' : 's';
+  const shape = base === 'Y' ? 'y' : base === 'K' ? 'k' : 't';
+  const swapEl = state.isSwapped && (shape === 't' || ((shape === 'k' || shape === 'y') && tier === 2));
+  return `${col}${shape}${tier}${swapEl ? 's' : ''}`;
+}
+
+// ─── DRAW ─────────────────────────────────────────────────────────────────────
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  for (let dR = 0; dR < GRID; dR++) {
+    for (let dC = 0; dC < GRID; dC++) {
+      const [gR, gC] = toGame(dR, dC);
+      drawCell(dR, dC, gR, gC);
+    }
+  }
+  // valid move dots
+  for (const [gR, gC] of state.validMoves) {
+    const [dR, dC] = toDisplay(gR, gC);
+    const x = dC*CELL+CELL/2, y = dR*CELL+CELL/2;
+    const isRep = state.repMoves.has(`${gR},${gC}`);
+    ctx.beginPath();
+    ctx.arc(x, y, CELL*.13, 0, Math.PI*2);
+    ctx.fillStyle = isRep ? '#ff4444cc' : '#2ecc71cc';
+    ctx.fill();
+  }
+  // selection ring
+  if (state.selected) {
+    const [gR, gC] = state.selected;
+    const [dR, dC] = toDisplay(gR, gC);
+    ctx.strokeStyle = C.select; ctx.lineWidth = 3;
+    ctx.strokeRect(dC*CELL+2, dR*CELL+2, CELL-4, CELL-4);
+  }
+}
+
+function drawCell(dR, dC, gR, gC) {
+  const cell = state.board[gR][gC];
+  const x = dC*CELL, y = dR*CELL;
+  let bg;
+  if (cell === 'D') { bg = C.wall; }
+  else if (isTopHome(gR,gC)) { bg = state.infTop.has(`${gR},${gC}`) ? C.infTop : C.home; }
+  else if (isBotHome(gR,gC)) { bg = state.infBot.has(`${gR},${gC}`) ? C.infBot : C.home; }
+  else { bg = C.ground; }
+  ctx.fillStyle = bg; ctx.fillRect(x, y, CELL, CELL);
+  ctx.strokeStyle = C.gridLine; ctx.lineWidth = .5; ctx.strokeRect(x, y, CELL, CELL);
+  if (cell !== 'B' && cell !== 'D') {
+    const [pType, pColor] = cell.split('_');
+    const key = getPieceImageKey(pType, pColor);
+    const img = IMG[key];
+    const pad = Math.floor(CELL*.06);
+    if (img && img.complete && img.naturalWidth > 0) {
+      ctx.drawImage(img, x+pad, y+pad, CELL-pad*2, CELL-pad*2);
+    } else {
+      ctx.beginPath(); ctx.arc(x+CELL/2, y+CELL/2, CELL*.35, 0, Math.PI*2);
+      ctx.fillStyle = pColor === 'Beyaz' ? '#fff' : '#111'; ctx.fill();
+      ctx.strokeStyle = '#888'; ctx.lineWidth = 1.5; ctx.stroke();
+    }
+  }
+}
+
+// ─── LEGAL MOVES ─────────────────────────────────────────────────────────────
+function legalMoves(r, c) {
+  const cell = state.board[r][c];
+  if (!cell || cell==='B' || cell==='D') return [];
+  const [pType, pColor] = cell.split('_');
+  let stage = pType.endsWith("''") ? 2 : pType.endsWith("'") ? 1 : 0;
+  let maxRange = stage === 2 ? 2 : 1;
+  if (state.isSwapped && state.moveCount===2 && state.turn==='Beyaz' && pColor==='Beyaz') maxRange = 2;
+  const base = pType.replace(/'+$/,'');
+  const vecs = base==='Y' ? [[-1,0],[1,0],[0,-1],[0,1]]
+             : base==='U' ? [[-1,-1],[-1,1],[1,-1],[1,1]]
+             :               [[-1,0],[1,0],[0,-1],[0,1],[-1,-1],[-1,1],[1,-1],[1,1]];
+  const moves = [];
+  for (const [dr,dc] of vecs) {
+    for (let s=1; s<=maxRange; s++) {
+      const nr=r+dr*s, nc=c+dc*s;
+      if (nr<0||nr>=GRID||nc<0||nc>=GRID) break;
+      const tgt = state.board[nr][nc];
+      if (tgt==='D') break;
+      if (tgt==='B') { moves.push([nr,nc]); }
+      else { if (tgt.split('_')[1]===pColor) break; moves.push([nr,nc]); }
+    }
+  }
+  return moves;
+}
+
+// ─── EXECUTE MOVE ─────────────────────────────────────────────────────────────
+function executeMove(targetR, targetC, fromOnline) {
+  const [startR, startC] = state.selected;
+  let cell = state.board[startR][startC];
+  let [pType, pColor, pOrigin] = cell.split('_');
+  let actionHappened = false, captures = 0, infVisits = [];
+  const dr = targetR===startR ? 0 : (targetR-startR)/Math.abs(targetR-startR);
+  const dc = targetC===startC ? 0 : (targetC-startC)/Math.abs(targetC-startC);
+
+  let cr = startR+dr, cc = startC+dc;
+  while (true) {
+    if (cr!==targetR||cc!==targetC) {
+      const mid = state.board[cr][cc];
+      if (mid!=='B'&&mid!=='D'&&mid.split('_')[1]!==pColor) {
+        state.board[cr][cc] = 'B'; pType = promote(pType); actionHappened = true; captures++;
+      }
+    }
+    if (pOrigin==='Alt' && isTopHome(cr,cc)) {
+      const k=`${cr},${cc}`; if (!state.infTop.has(k)) { state.infTop.add(k); actionHappened=true; infVisits.push(k); }
+    } else if (pOrigin==='Ust' && isBotHome(cr,cc)) {
+      const k=`${cr},${cc}`; if (!state.infBot.has(k)) { state.infBot.add(k); actionHappened=true; infVisits.push(k); }
+    }
+    if (cr===targetR&&cc===targetC) break;
+    cr+=dr; cc+=dc;
+  }
+  const dest = state.board[targetR][targetC];
+  if (dest!=='B'&&dest!=='D'&&dest.split('_')[1]!==pColor) {
+    pType = promote(pType); actionHappened=true; captures++;
+  }
+  state.board[startR][startC] = 'B';
+  state.board[targetR][targetC] = `${pType}_${pColor}_${pOrigin}`;
+
+  const cols = 'abcdefghi';
+  const note = `${state.moveCount}. ${pType.replace(/'+$/,'')}${cols[startC]}${9-startR}-${cols[targetC]}${9-targetR}${pType.endsWith("''")?'\'\'':pType.endsWith("'")?'\'':''}${captures>0?'x':''}${infVisits.length?'+H':''}`;
+  state.notation.push(note);
+  state.selected = null; state.validMoves = []; state.repMoves = new Set();
+  state.inactive = actionHappened ? 0 : state.inactive + 1;
+
+  if (!fromOnline && onlineMode && socket && roomId) {
+    socket.emit('make_move', {room_id: roomId, from:[startR,startC], to:[targetR,targetC], notation: state.notation});
+  }
+
+  if (checkGameOver()) return;
+
+  if (state.moveCount===1 && state.turn==='Beyaz' && state.pieAvail) {
+    draw(); updateUI();
+    if (!onlineMode) { showPieModal(); }
+    else if (IS_SPECTATE) { /* spectators just watch */ }
+    else if (myColor==='Siyah') { showPieModal(); }
+    else { showPieWaiting(true); }
+    return;
+  }
+  switchTurn();
+}
+
+function applyOpponentMove(from, to) {
+  state.selected = from;
+  executeMove(to[0], to[1], true);
+}
+
+function promote(pType) {
+  if (pType.endsWith("''")) return pType;
+  if (pType.endsWith("'"))  return pType.replace(/'$/,"''");
+  return pType+"'";
+}
+
+// ─── SWAP ─────────────────────────────────────────────────────────────────────
+function applySwap() {
+  state.isSwapped = true;
+  state.notation.push('⇄ PIE RULE: SWAP');
+  for (let r=0;r<GRID;r++) for (let c=0;c<GRID;c++) {
+    const cell = state.board[r][c];
+    if (cell!=='B'&&cell!=='D') {
+      const [pt,pc,po] = cell.split('_');
+      state.board[r][c] = `${pt}_${pc==='Beyaz'?'Siyah':'Beyaz'}_${po}`;
+    }
+  }
+  state.infTop.clear(); state.infBot.clear();
+  state.boardHistory = new Map(); state.inactive = 0;
+  state.turn = 'Beyaz'; state.moveCount = 2; state.reboundBoost = true;
+}
+
+// ─── TURN ─────────────────────────────────────────────────────────────────────
+function switchTurn() {
+  if (state.turn==='Beyaz') state.turn='Siyah';
+  else { state.turn='Beyaz'; state.moveCount++; }
+  if (state.reboundBoost && state.moveCount > 2) state.reboundBoost = false;
+  const h = stateHash();
+  const cnt = (state.boardHistory.get(h)||0)+1;
+  state.boardHistory.set(h, cnt);
+  if (cnt >= MAX_REPETITIONS) {
+    updateUI(); draw();
+    endGame(t('game.over'), `Aynı pozisyon ${MAX_REPETITIONS} kez tekrarlandı.`, 'repetition');
+    return;
+  }
+  updateUI(); draw();
+}
+
+// ─── PIE MODAL ────────────────────────────────────────────────────────────────
+function showPieModal() {
+  document.getElementById('pie-modal').classList.add('visible');
+  document.getElementById('btn-keep').textContent = t('game.swap_keep');
+  document.getElementById('btn-swap').textContent = t('game.swap_do');
+}
+function showPieWaiting(show) {
+  document.getElementById('pie-waiting').classList[show?'add':'remove']('visible');
+}
+
+document.getElementById('btn-keep').onclick = () => {
+  document.getElementById('pie-modal').classList.remove('visible');
+  state.pieAvail = false;
+  if (onlineMode && socket) socket.emit('pie_decision',{room_id:roomId,decision:'keep'});
+  switchTurn();
+};
+document.getElementById('btn-swap').onclick = () => {
+  document.getElementById('pie-modal').classList.remove('visible');
+  state.pieAvail = false;
+  applySwap();
+  if (onlineMode && socket) {
+    socket.emit('pie_decision',{room_id:roomId,decision:'swap'});
+    myColor = myColor==='Beyaz'?'Siyah':'Beyaz';
+    updateFlip(); updateMyBadge();
+  }
+  updateUI(); draw();
+};
+
+// ─── GAME OVER ────────────────────────────────────────────────────────────────
+function checkGameOver() {
+  if (state.infTop.size===5) { endGame(`${state.turn} Kazandı!`,'Ev işgali tamamlandı!','infiltration'); return true; }
+  if (state.infBot.size===5) { endGame(`${state.turn} Kazandı!`,'Ev işgali tamamlandı!','infiltration'); return true; }
+  let w=0,b=0;
+  for (let r=0;r<GRID;r++) for (let c=0;c<GRID;c++) {
+    const cell=state.board[r][c];
+    if(cell!=='B'&&cell!=='D') { if(cell.split('_')[1]==='Beyaz')w++; else b++; }
+  }
+  if(w===0){endGame('Siyah Kazandı!','Tüm beyaz taşlar imha edildi.','elimination');return true;}
+  if(b===0){endGame('Beyaz Kazandı!','Tüm siyah taşlar imha edildi.','elimination');return true;}
+  if(state.inactive>=50){endGame('Beraberlik!','50 hamle eylemsizlik.','inactive');return true;}
+  return false;
+}
+
+function endGame(title, msg, reason) {
+  state.over = true; draw();
+  document.getElementById('gameover-title').textContent = title;
+  document.getElementById('gameover-msg').textContent   = msg;
+  document.getElementById('btn-lobby').textContent      = t('game.lobby');
+  if (onlineMode && socket) {
+    const winner = state.infTop.size===5||state.infBot.size===5
+      ? state.turn
+      : (reason==='repetition'||reason==='inactive' ? 'draw' : state.turn);
+    socket.emit('game_over',{room_id:roomId, winner, reason, notation:state.notation});
+  }
+  document.getElementById('gameover-modal').classList.add('visible');
+}
+
+// ─── UI UPDATE ────────────────────────────────────────────────────────────────
+function updateUI() {
+  const isBoost = state.isSwapped && state.moveCount===2 && state.turn==='Beyaz';
+  document.getElementById('boost-badge').style.display = isBoost ? 'inline' : 'none';
+  const isMyTurn = onlineMode && myColor === state.turn;
+  let turnText = state.turn.toUpperCase() + ' — ' + t('game.move') + ' ' + state.moveCount;
+  if (onlineMode && !IS_SPECTATE) turnText += isMyTurn ? ` (${t('game.your_turn')})` : ` (${t('game.opp_turn')})`;
+  document.getElementById('turn-label').textContent = turnText;
+  document.getElementById('turn-label').style.color = state.turn==='Beyaz'?'#fff':'#aaddff';
+  document.getElementById('canvas-wrap').classList[onlineMode&&!isMyTurn&&!IS_SPECTATE?'add':'remove']('opp-turn');
+
+  const topL = state.isSwapped ? t('game.inf_bot') : t('game.inf_top');
+  const botL = state.isSwapped ? t('game.inf_top') : t('game.inf_bot');
+  const rep  = state.boardHistory.get(stateHash())||0;
+  document.getElementById('stats-label').textContent =
+    `${topL}: ${state.infTop.size}/5 | ${botL}: ${state.infBot.size}/5 | ${t('game.repeat')}: ${rep}/${MAX_REPETITIONS} | ${t('game.inactive')}: ${state.inactive}/50`;
+
+  const panel = document.getElementById('notation-panel');
+  panel.innerHTML = state.notation.map(n=>`<span>${n}</span>`).join('');
+  panel.scrollLeft = panel.scrollWidth;
+}
+
+function updateMyBadge() {
+  const badge = document.getElementById('my-color-badge');
+  if (!onlineMode||!myColor||IS_SPECTATE) { badge.style.display='none'; return; }
+  badge.style.display = 'inline';
+  badge.textContent   = myColor==='Beyaz' ? `▣ ${t('game.you')} ${t('game.white')}` : `▣ ${t('game.you')} ${t('game.black')}`;
+  badge.style.cssText += `;background:${myColor==='Beyaz'?'#ffffff22':'#aaddff22'};color:${myColor==='Beyaz'?'#fff':'#aaddff'};border:1px solid ${myColor==='Beyaz'?'#ccc':'#3498db'}`;
+}
+
+// ─── REPETITION WARN ─────────────────────────────────────────────────────────
+function wouldCauseRepetition(sr,sc,tr,tc) {
+  const dest = state.board[tr][tc];
+  if (dest!=='B'&&dest!=='D') return false;
+  const [,,pOrigin] = state.board[sr][sc].split('_');
+  const coord=`${tr},${tc}`;
+  if (pOrigin==='Alt'&&isTopHome(tr,tc)&&!state.infTop.has(coord)) return false;
+  if (pOrigin==='Ust'&&isBotHome(tr,tc)&&!state.infBot.has(coord)) return false;
+  const bCopy = state.board.map(r=>[...r]);
+  bCopy[sr][sc]='B'; bCopy[tr][tc]=state.board[sr][sc];
+  const newTurn = state.turn==='Beyaz'?'Siyah':'Beyaz';
+  const h = `${bCopy.map(r=>r.join(',')).join('|')}~${newTurn}~${[...state.infTop].sort().join(';')}~${[...state.infBot].sort().join(';')}`;
+  return (state.boardHistory.get(h)||0) >= MAX_REPETITIONS-1;
+}
+
+// ─── INPUT ────────────────────────────────────────────────────────────────────
+canvas.addEventListener('click', e => {
+  if (state.over || IS_SPECTATE) return;
+  if (document.getElementById('pie-modal').classList.contains('visible')) return;
+  if (onlineMode && myColor && state.turn !== myColor) return;
+
+  const rect = canvas.getBoundingClientRect();
+  const dC = Math.floor((e.clientX-rect.left)/CELL);
+  const dR = Math.floor((e.clientY-rect.top)/CELL);
+  if (dR<0||dR>=GRID||dC<0||dC>=GRID) return;
+  const [gR, gC] = toGame(dR, dC);
+
+  if (state.selected && state.validMoves.some(([vr,vc])=>vr===gR&&vc===gC)) {
+    executeMove(gR, gC, false); return;
+  }
+  const cell = state.board[gR][gC];
+  if (cell!=='B'&&cell!=='D'&&cell.split('_')[1]===state.turn) {
+    state.selected = [gR, gC];
+    state.validMoves = legalMoves(gR, gC);
+    state.repMoves = new Set(
+      state.validMoves.filter(([mr,mc])=>wouldCauseRepetition(gR,gC,mr,mc)).map(([mr,mc])=>`${mr},${mc}`)
+    );
+    draw(); return;
+  }
+  state.selected = null; state.validMoves = []; draw();
+});
+
+// ─── CHAT ─────────────────────────────────────────────────────────────────────
+function sendChat() {
+  const inp = document.getElementById('chat-input');
+  const txt = inp.value.trim();
+  if (!txt||!socket) return;
+  socket.emit('chat_message',{room_id:roomId, text:txt});
+  inp.value = '';
+}
+document.getElementById('chat-send').onclick  = sendChat;
+document.getElementById('chat-input').onkeydown = e => { if(e.key==='Enter') sendChat(); };
+
+function appendMessage(data) {
+  const box = document.getElementById('chat-messages');
+  const div = document.createElement('div');
+  const isMe = data.username === USERNAME;
+  div.className = 'chat-msg';
+  div.innerHTML = `<span class="from" style="${isMe?'color:var(--accent)':''}">${data.username}</span><span class="text">${escHtml(data.text)}</span><span class="ts">${data.ts}</span>`;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+function sysMsg(text) {
+  const box = document.getElementById('chat-messages');
+  const div = document.createElement('div');
+  div.className = 'system-msg'; div.textContent = text;
+  box.appendChild(div); box.scrollTop = box.scrollHeight;
+}
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ─── SOCKET.IO ────────────────────────────────────────────────────────────────
+const socket = io();
+
+socket.on('game_start', data => {
+  myColor    = data.your_color;
+  roomId     = data.room_id || roomId;
+  onlineMode = true;
+  updateFlip();
+  updateMyBadge();
+  initState(); updateUI(); draw();
+  sysMsg(`Oyun başladı! Sen ${myColor} oynuyorsun.`);
+});
+
+socket.on('game_move', data => {
+  // data: {from, to, mover_color}
+  if (!onlineMode) return;
+  const isMyMove = data.mover_color === myColor && !IS_SPECTATE;
+  if (isMyMove) return; // I already applied it locally
+  applyOpponentMove(data.from, data.to);
+});
+
+socket.on('opponent_pie', data => {
+  showPieWaiting(false);
+  state.pieAvail = false;
+  if (data.decision === 'swap') {
+    applySwap();
+    if (!IS_SPECTATE) { myColor = myColor==='Beyaz'?'Siyah':'Beyaz'; updateFlip(); updateMyBadge(); }
+    updateUI(); draw();
+  } else {
+    switchTurn();
+  }
+});
+
+socket.on('spectate_state', data => {
+  // Spectator received current game state — replay notation (minimal: just show notation)
+  state.notation = data.notation || [];
+  updateUI(); draw();
+  sysMsg('Maçı izliyorsunuz.');
+});
+
+socket.on('new_message', appendMessage);
+
+socket.on('elo_update', data => {
+  const iW = myColor==='Beyaz';
+  const myDelta  = iW ? data.white_delta : data.black_delta;
+  const oppDelta = iW ? data.black_delta : data.white_delta;
+  document.getElementById('elo-info').textContent =
+    `${t('game.elo_change')}: ${myDelta>=0?'+':''}${myDelta} ELO`;
+});
+
+socket.on('opponent_disconnected', () => {
+  endGame(t('game.opp_left'), t('game.opp_left_msg'), 'disconnect');
+});
+
+socket.on('connect', () => {
+  if (IS_SPECTATE) {
+    socket.emit('spectate_join',{room_id: ROOM_ID});
+    document.getElementById('spectator-badge').style.display = 'block';
+    sysMsg('Seyirci modunda bağlandınız.');
+  } else {
+    socket.emit('join_room_req',{room_id: ROOM_ID});
+  }
+});
+
+socket.on('join_error', data => sysMsg('⚠ ' + data.msg));
+
+// ─── BOOT ─────────────────────────────────────────────────────────────────────
+initState();
+updateUI();
+document.getElementById('pie-title').textContent = t('game.swap_title');
+document.getElementById('pie-desc').textContent  = t('game.swap_desc');
+document.getElementById('btn-keep').textContent  = t('game.swap_keep');
+document.getElementById('btn-swap').textContent  = t('game.swap_do');
+document.getElementById('pie-wait-text').textContent = t('game.swap_wait');
+document.getElementById('gameover-title').textContent = t('game.over');
+document.getElementById('btn-lobby').textContent = t('game.lobby');
+
+preloadImages(() => { resize(); });
+window.addEventListener('resize', resize);
+</script>
+{% endblock %}

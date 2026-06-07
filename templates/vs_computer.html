@@ -1,0 +1,21 @@
+{% extends 'base.html' %}
+{% block title %}Rotaka — Bilgisayara Karşı{% endblock %}
+{% block content %}
+<div class="vscomp-hero">
+  <div class="icon">🤖</div>
+  <h2 data-i18n="vscomp.title">Bilgisayara Karşı Oyna</h2>
+  <p style="color:var(--accent);font-size:1.2rem;font-weight:700;margin:10px 0" data-i18n="vscomp.coming">Yakında…</p>
+  <p data-i18n="vscomp.desc">Eğitilmiş Rotaka AI'larımız bu sayfaya eklenecek. Şu an sadece çevrimiçi oyun mevcut.</p>
+
+  <div style="margin-top:40px;display:flex;flex-direction:column;align-items:center;gap:12px">
+    <p style="color:var(--text-muted);font-size:0.85rem">Gelecekte burada zorluk seviyeleri yer alacak:</p>
+    {% for level, label in [('easy','🟢 Kolay'), ('medium','🟡 Orta'), ('hard','🔴 Zor'), ('master','🟣 Usta')] %}
+    <button class="btn btn-ghost" style="width:220px;opacity:0.4;cursor:not-allowed" disabled>{{ label }}</button>
+    {% endfor %}
+  </div>
+
+  <div style="margin-top:40px">
+    <a href="{{ url_for('index') }}" class="btn btn-primary">Lobiye Dön</a>
+  </div>
+</div>
+{% endblock %}

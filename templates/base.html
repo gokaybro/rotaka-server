@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="{{ (user.language if user else session.get('language', 'tr')) }}">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}Rotaka{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+<script src="{{ url_for('static', filename='js/i18n.js') }}" defer></script>
+{% block head %}{% endblock %}
+</head>
+<body>
+
+<nav>
+  <a href="{{ url_for('index') }}" class="nav-logo">⬡ ROTAKA</a>
+  <a href="{{ url_for('index') }}"       class="nav-link" data-i18n="nav.home"></a>
+  <a href="{{ url_for('spectate') }}"    class="nav-link" data-i18n="nav.spectate"></a>
+  <a href="{{ url_for('vs_computer') }}" class="nav-link" data-i18n="nav.vscomp"></a>
+
+  <div class="nav-spacer"></div>
+
+  <!-- Language switcher -->
+  <button class="lang-btn" onclick="setLang('tr')" id="lang-tr">TR</button>
+  <button class="lang-btn" onclick="setLang('en')" id="lang-en" style="margin-left:4px">EN</button>
+
+  {% if user %}
+    <a href="{{ url_for('profile', username=user.username) }}"
+       class="nav-link" style="margin-left:8px">
+      👤 {{ user.username }}
+      <span style="color:var(--text-muted);font-size:0.75rem"> ({{ user.elo }})</span>
+    </a>
+    <a href="{{ url_for('logout') }}" class="nav-link" data-i18n="nav.logout"></a>
+  {% else %}
+    <a href="{{ url_for('login') }}"    class="nav-link" style="margin-left:8px" data-i18n="nav.login"></a>
+    <a href="{{ url_for('register') }}" class="btn btn-primary btn-sm" style="margin-left:6px" data-i18n="nav.register"></a>
+  {% endif %}
+</nav>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    <div class="flashes">
+      {% for cat, msg in messages %}
+        <div class="flash {{ cat }}">{{ msg }}</div>
+      {% endfor %}
+    </div>
+  {% endif %}
+{% endwith %}
+
+<main>
+  {% block content %}{% endblock %}
+</main>
+
+<script>
+// Activate correct lang button on load
+(function(){
+  const lang = localStorage.getItem('rotaka_lang') || '{{ (user.language if user else "tr") }}';
+  document.getElementById('lang-' + lang)?.classList.add('active');
+  const other = lang === 'tr' ? 'en' : 'tr';
+  document.getElementById('lang-' + other)?.classList.remove('active');
+})();
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

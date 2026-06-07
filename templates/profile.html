@@ -1,0 +1,150 @@
+{% extends 'base.html' %}
+{% block title %}Rotaka — {{ profile_user.username }}{% endblock %}
+{% block content %}
+
+<div class="profile-header">
+  <div class="avatar">{{ profile_user.username[0].upper() }}</div>
+  <div>
+    <div class="profile-name">{{ profile_user.username }}</div>
+    <div class="profile-meta">
+      <span class="rank-badge" style="background:{{ rank_color }}22;color:{{ rank_color }};border:1px solid {{ rank_color }}">
+        {{ rank }}
+      </span>
+      &nbsp;<strong style="color:var(--accent)">{{ profile_user.elo }} ELO</strong>
+    </div>
+    {% if user and user.id != profile_user.id %}
+      {% if not is_friend %}
+        <button class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="addFriend()"
+                data-i18n="profile.add_friend">Arkadaş Ekle</button>
+      {% else %}
+        <span style="color:var(--green);font-size:0.82rem;margin-top:8px;display:block">✓ Arkadaş</span>
+      {% endif %}
+    {% endif %}
+  </div>
+</div>
+
+<!-- Stats -->
+<div class="card" style="margin-bottom:16px">
+  <div class="card-title" data-i18n="profile.stats">İstatistikler</div>
+  {% set total = stats.total or 0 %}
+  {% set wins  = stats.wins  or 0 %}
+  <div class="stat-grid">
+    <div class="stat-box">
+      <div class="val">{{ total }}</div>
+      <div class="lbl" data-i18n="profile.games">Toplam Oyun</div>
+    </div>
+    <div class="stat-box">
+      <div class="val" style="color:var(--green)">{{ wins }}</div>
+      <div class="lbl" data-i18n="profile.wins">Galibiyet</div>
+    </div>
+    <div class="stat-box">
+      <div class="val" style="color:var(--red)">{{ stats.losses or 0 }}</div>
+      <div class="lbl" data-i18n="profile.losses">Mağlubiyet</div>
+    </div>
+    <div class="stat-box">
+      <div class="val" style="color:var(--text-muted)">{{ stats.draws or 0 }}</div>
+      <div class="lbl" data-i18n="profile.draws">Beraberlik</div>
+    </div>
+    <div class="stat-box">
+      <div class="val">{{ ((wins / total * 100)|round(1) if total > 0 else 0) }}%</div>
+      <div class="lbl" data-i18n="profile.winpct">Kazanma %</div>
+    </div>
+    <div class="stat-box">
+      <div class="val" style="color:var(--blue)">{{ stats.inf_wins or 0 }}</div>
+      <div class="lbl" data-i18n="profile.inf_wins">İşgalle Kazanma</div>
+    </div>
+    <div class="stat-box">
+      <div class="val" style="color:var(--accent2)">{{ stats.elim_wins or 0 }}</div>
+      <div class="lbl" data-i18n="profile.elim_wins">Taş İmhası</div>
+    </div>
+  </div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+  <!-- Game History -->
+  <div class="card">
+    <div class="card-title" data-i18n="profile.history">Son Oyunlar</div>
+    {% if games %}
+      {% for g in games %}
+        {% set is_white = g.white_user_id == profile_user.id %}
+        {% set my_color = 'Beyaz' if is_white else 'Siyah' %}
+        {% set won = g.winner == my_color %}
+        {% set draw = g.winner == 'draw' %}
+        <div class="game-history-row">
+          <span class="{{ 'result-w' if won else ('result-d' if draw else 'result-l') }}">
+            {{ '✓' if won else ('=' if draw else '✗') }}
+          </span>
+          <span style="flex:1;font-size:0.8rem">
+            {{ g.white_username or '?' }} vs {{ g.black_username or '?' }}
+          </span>
+          <span style="color:var(--text-muted);font-size:0.75rem">
+            {% if g.win_reason == 'infiltration' %}🏠
+            {% elif g.win_reason == 'elimination' %}⚔
+            {% else %}={% endif %}
+          </span>
+          {% if is_white %}
+            <span style="font-size:0.75rem;color:{% if g.white_elo_after and g.white_elo_before %}{{ 'var(--green)' if g.white_elo_after >= g.white_elo_before else 'var(--red)' }}{% else %}var(--text-muted){% endif %}">
+              {% if g.white_elo_after and g.white_elo_before %}
+                {{ '+' if g.white_elo_after >= g.white_elo_before else '' }}{{ g.white_elo_after - g.white_elo_before }}
+              {% endif %}
+            </span>
+          {% else %}
+            <span style="font-size:0.75rem;color:{% if g.black_elo_after and g.black_elo_before %}{{ 'var(--green)' if g.black_elo_after >= g.black_elo_before else 'var(--red)' }}{% else %}var(--text-muted){% endif %}">
+              {% if g.black_elo_after and g.black_elo_before %}
+                {{ '+' if g.black_elo_after >= g.black_elo_before else '' }}{{ g.black_elo_after - g.black_elo_before }}
+              {% endif %}
+            </span>
+          {% endif %}
+        </div>
+      {% endfor %}
+    {% else %}
+      <p style="color:var(--text-muted);font-size:0.85rem" data-i18n="profile.no_games">Henüz oyun yok.</p>
+    {% endif %}
+  </div>
+
+  <!-- Friends -->
+  <div class="card">
+    <div class="card-title" data-i18n="profile.friends">Arkadaşlar</div>
+    {% if friends %}
+      {% for f in friends %}
+      <div class="friend-row">
+        <span class="fname">
+          <a href="{{ url_for('profile', username=f.username) }}">{{ f.username }}</a>
+        </span>
+        <span style="font-size:0.75rem;color:var(--text-muted)">{{ f.elo }} ELO</span>
+        {% if f.status == 'pending' and f.direction == 'received' and user and user.id == profile_user.id %}
+          <button class="btn btn-green btn-sm"
+                  onclick="acceptFriend({{ f.id }})" data-i18n="profile.accept">Kabul Et</button>
+        {% elif f.status == 'pending' %}
+          <span style="color:var(--text-muted);font-size:0.75rem" data-i18n="profile.friend_sent">Gönderildi</span>
+        {% endif %}
+      </div>
+      {% endfor %}
+    {% else %}
+      <p style="color:var(--text-muted);font-size:0.85rem" data-i18n="profile.no_friends">Henüz arkadaş yok.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function addFriend() {
+  fetch('/api/friend/add', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({username: '{{ profile_user.username }}'})
+  }).then(r => r.json()).then(d => {
+    if (d.ok) location.reload();
+    else alert('İstek gönderilemedi.');
+  });
+}
+function acceptFriend(uid) {
+  fetch('/api/friend/accept', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({requester_id: uid})
+  }).then(() => location.reload());
+}
+</script>
+{% endblock %}
